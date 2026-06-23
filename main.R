@@ -4,44 +4,48 @@ library(lubridate)
 library(ggplot2)
 library(stringr)
 
-# 1. Load and Transform Data
-df_original <- fromJSON("hotel-hue-reviews.json")
+# Helper function to print data status
+peek <- function(df, step_name) {
+    cat(sprintf("\n--- %s ---\n", step_name))
+    cat(sprintf("Dimensions: %d rows x %d columns\n", nrow(df), ncol(df)))
+    print(head(df, 3))
+}
 
-# --- Diagnostic Summary ---
-na_percentage <- sum(is.na(df_original)) / (nrow(df_original) * ncol(df_original)) * 100
+# --- 1. Load and Transform ---
+raw_data <- fromJSON("hotel-hue-reviews.json")
+peek(raw_data, "1a. Initial Data Load")
 
-cat(sprintf("Numbers of NA: %d\n", sum(is.na(df_original))))
-cat(sprintf("Percentage of missing data: %.2f%%\n", na_percentage))
-cat(sprintf("Total number of duplicate rows: %d\n", sum(duplicated(df_original))))
-cat(sprintf("Number of errors or incorrect data format/values: %d\n", sum(!complete.cases(df_original))))
-# --------------------------
-
-# Process data
-# Change name and process strings
-df <- df_original |>
+df <- raw_data |>
     mutate(
-        hotel_name = str_extract(url, "(?<=Reviews-)[^/-]+"),
-        reviewer_name = str_extract(reviewer_url, "[^/]+$")
+        hotel_name = str_extract(url, "(?<=Reviews-)[^/-]+") |> str_replace_all("_", " "),
+        province = str_to_title(str_trim(province)),
+        trip_type_clean = case_when(
+            str_detect(trip_type, "(?i)couple") ~ "Couple",
+            str_detect(trip_type, "(?i)family") ~ "Family",
+            str_detect(trip_type, "(?i)solo|business") ~ "Solo/Business",
+            str_detect(trip_type, "(?i)friend") ~ "Friends",
+            TRUE ~ "Other"
+        ),
+        language_clean = case_when(
+            str_detect(language, "(?i)en|english") ~ "English",
+            str_detect(language, "(?i)vi|viet|vn") ~ "Vietnamese",
+            str_detect(language, "(?i)fr|french") ~ "French",
+            TRUE ~ "Other/International"
+        ),
+        comment_length = nchar(comment),
+        reviewer_id = str_extract(reviewer_url, "[^/]+$"),
+        visit_date = my(visit_date),
+        rating = as.numeric(star)
     ) |>
-    # ROBUST ID GENERATION: Using group_indices() for global unique IDs
-    # mutate(reviewer_id = group_indices(pick(), reviewer_name)) |>
-    select(-title, -reviewer_url)
+    select(-reviewer_url) |>
+    distinct(url, reviewer_id, .keep_all = TRUE)
 
+peek(df, "1b. After Normalization and Deduplication")
 
-# 2. Hard filter
-df_deduplicated <- df |>
-    distinct() # Remove duplicate rows
-# Cast and split and create columns
-df_clean <- df_deduplicated |>
-    # filter(
-    #     visit_date >= as.Date("2000-01-01") & visit_date <= as.Date("2026-12-31"),
-    #     star >= 1 & star <= 5
-    # ) |>
-    mutate(visit_date = as.Date(visit_date)) |>
+# --- 2. Feature Engineering ---
+df_clean <- df |>
     mutate(
         year = year(visit_date),
-        month = month(visit_date),
-        rating = as.numeric(star),
         rating_group = case_when(
             rating >= 4.5 ~ "Excellent",
             rating >= 4.0 ~ "Good",
@@ -50,54 +54,25 @@ df_clean <- df_deduplicated |>
         )
     )
 
-# 3. Export
+peek(df_clean, "2. After Feature Engineering")
+
+# --- 3. Diagnostic Summary ---
+cat("\n--- Data Quality Report ---\n")
+cat(sprintf("Total Records: %d\n", nrow(df_clean)))
+cat(sprintf("Languages identified: %s\n", paste(unique(df_clean$language_clean), collapse = ", ")))
+
+# --- 4. Visualizations ---
+ggplot(df_clean, aes(x = hotel_name, fill = language_clean)) +
+    geom_bar(position = "dodge") +
+    labs(title = "Review Volume by Language", x = "Hotel", y = "Count") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(df_clean, aes(x = language_clean, y = rating, fill = language_clean)) +
+    geom_violin(alpha = 0.6) +
+    labs(title = "Rating Distribution by Language", x = "Language", y = "Star Rating") +
+    theme_minimal()
+
+# --- 5. Export ---
 write.csv(df_clean, "cleaned_hotel_data.csv", row.names = FALSE)
-
-# 4. Analysis
-time_analysis <- df_clean |>
-    summarise(
-        volume = n(),
-        average_rating = mean(rating),
-        .by = c(hotel_name, year, month)
-    ) |>
-    arrange(hotel_name, year, month)
-
-# 5. Visualization
-ggplot(time_analysis, aes(x = as.Date(paste(year, month, "01", sep = "-")), y = average_rating)) +
-    geom_line(color = "steelblue", linewidth = 0.8) +
-    geom_smooth(method = "loess", color = "red", linetype = "dashed", se = FALSE) +
-    facet_wrap(~hotel_name, scales = "free_y") +
-    labs(
-        title = "Average Rating Trend by Hotel",
-        subtitle = "Faceted analysis of performance over time (2000-2026)",
-        x = "Date", y = "Average Star Rating"
-    ) +
-    theme_minimal() +
-    theme(strip.text = element_text(face = "bold", size = 10))
-
-# Calculate counts per hotel and rating group
-rating_counts <- df_clean |>
-    group_by(hotel_name, rating_group) |>
-    summarise(count = n(), .groups = "drop")
-
-# Set factor levels to ensure the order of groups (optional but recommended)
-rating_counts$rating_group <- factor(rating_counts$rating_group,
-    levels = c("Excellent", "Good", "Average", "Low")
-)
-
-# Generate the plot
-ggplot(rating_counts, aes(x = rating_group, y = count, fill = rating_group)) +
-    geom_col() +
-    facet_wrap(~hotel_name, scales = "free_y") +
-    labs(
-        title = "Distribution of Review Ratings by Hotel",
-        subtitle = "Count of reviews categorized by rating group",
-        x = "Rating Group",
-        y = "Number of Reviews"
-    ) +
-    theme_minimal() +
-    theme(
-        strip.text = element_text(face = "bold", size = 10),
-        axis.text.x = element_text(angle = 45, hjust = 1)
-    ) +
-    scale_fill_brewer(palette = "Set3")
+cat("\nProcess complete. Data exported to 'cleaned_hotel_data.csv'.\n")
