@@ -69,17 +69,13 @@ peek(cleaned_trip_data, "Trip Type Normalization Complete")
 
 cleaned_trip_data <- cleaned_trip_data |>
     mutate(
-        # More precise: month name/abbr, whitespace, exactly 4 digits,
-        # then a word boundary (space, comma, letter, or end of string)
         clean_date_str = str_extract(
             visit_date,
             "(?i)(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{4}(?=\\D|$)"
         ),
-
-        # Convert Buddhist Era years (BE - 543 = CE)
         be_year = as.integer(str_extract(clean_date_str, "\\d{4}")),
         clean_date_str = case_when(
-            !is.na(be_year) & be_year > 2100 ~
+            !is.na(clean_date_str) & !is.na(be_year) & be_year > 2100 ~
                 str_replace(clean_date_str, as.character(be_year), as.character(be_year - 543)),
             TRUE ~ clean_date_str
         ),
