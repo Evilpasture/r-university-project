@@ -74,9 +74,12 @@ cleaned_trip_data <- cleaned_trip_data |>
             "(?i)(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{4}(?=\\D|$)"
         ),
         be_year = as.integer(str_extract(clean_date_str, "\\d{4}")),
+        be_year = coalesce(be_year, 0L) # <-- kills the NAs before case_when runs
+    ) |>
+    mutate(
         clean_date_str = case_when(
-            !is.na(clean_date_str) & !is.na(be_year) & be_year > 2100 ~
-                str_replace(clean_date_str, as.character(be_year), as.character(be_year - 543)),
+            be_year > 2100 ~
+                str_replace(clean_date_str, as.character(be_year), as.character(be_year - 543L)),
             TRUE ~ clean_date_str
         ),
         visit_date = my(clean_date_str),
