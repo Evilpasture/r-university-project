@@ -5,6 +5,13 @@ library(jsonlite)
 library(lubridate)
 library(stringr)
 
+# Check current locale
+Sys.getlocale("LC_TIME")
+
+# Set temporarily to English
+Sys.setlocale("LC_TIME", "en_US.UTF-8")
+# Note: On Windows this might be "English_United States.1252"
+
 peek <- function(df, step_name) {
     cat(sprintf("\n--- %s ---\n", step_name))
     cat(sprintf("Dimensions: %d rows x %d columns\n", nrow(df), ncol(df)))
@@ -29,6 +36,9 @@ lang_map <- c(
 )
 
 raw_data <- fromJSON("hotel-hue-reviews.json")
+
+# View the raw strings that are failing to parse
+unique(raw_data$visit_date[is.na(cleaned_trip_data$visit_date)])
 
 cleaned_language_data <- raw_data |>
     distinct(reviewer_url, visit_date, .keep_all = TRUE) |>
@@ -59,17 +69,24 @@ peek(cleaned_trip_data, "Trip Type Normalization Complete")
 
 cleaned_trip_data <- cleaned_trip_data |>
     mutate(
-        # 1. Extract 3-letter month OR full month name, followed by 4 digits
-        # 2. This regex captures: "June 2026", "Jun 2026", "Oct 2015" (ignoring trailing text)
-        clean_date_str = str_extract(visit_date, "(?i)[A-Z][a-z]+\\s+\\d{4}|[A-Z][a-z]{2}\\s+\\d{4}"),
+        # More precise: month name/abbr, whitespace, exactly 4 digits,
+        # then a word boundary (space, comma, letter, or end of string)
+        clean_date_str = str_extract(
+            visit_date,
+            "(?i)(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{4}(?=\\D|$)"
+        ),
 
-        # 3. Now parse the cleaned string
+        # Convert Buddhist Era years (BE - 543 = CE)
+        be_year = as.integer(str_extract(clean_date_str, "\\d{4}")),
+        clean_date_str = case_when(
+            !is.na(be_year) & be_year > 2100 ~
+                str_replace(clean_date_str, as.character(be_year), as.character(be_year - 543)),
+            TRUE ~ clean_date_str
+        ),
         visit_date = my(clean_date_str),
-
-        # 4. Clean up the helper column and ensure stars are numeric
         star = as.numeric(star)
     ) |>
-    select(-clean_date_str) # Remove helper column
+    select(-clean_date_str, -be_year)
 
 
 # Check the results
